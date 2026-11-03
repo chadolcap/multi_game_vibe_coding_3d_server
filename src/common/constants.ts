@@ -98,6 +98,13 @@ export const LOBBY_START_X = 0;                 // 접속하면 서 있는 자�
 export const LOBBY_START_Z = 27.2;
 export const LOBBY_WALK_RADIUS = 28.6;          // 받은 위치를 이 반지름 안으로 자른다
 export const LOBBY_MOVE_FLUSH_MS = 200;         // 바뀐 위치를 묶어 보내는 간격
+// 오리 행동 MOTION_CHANGE.kind (통신 문서 lobby 시트). 앉기/일어서기는 자세라 서버가 기억해 새 입장자에게
+// 알려 주고(LobbyUserInfo.motion), 인사/점프는 한 번 하는 동작이라 기억하지 않는다.
+export const LOBBY_MOTION_SIT = 1;
+export const LOBBY_MOTION_STAND = 2;
+export const LOBBY_MOTION_GREET = 3;
+export const LOBBY_MOTION_JUMP = 4;
+export const LOBBY_MOTION_MIN_INTERVAL_MS = 300; // 같은 유저가 이보다 빨리 다시 보내면 무시 — 전체 중계라 연타를 막는다
 // 로비 오리 색 — 같은 채널에 있는 유저끼리 가능한 한 겹치지 않게 서버가 하나씩 나눠 준다(0xRRGGBB).
 export const LOBBY_DUCK_COLORS = [
     0xffe58a, // 노랑

@@ -10,6 +10,9 @@
 //   7) ENTER_LOBBY 전 LOBBY_MOVE 는 무시된다
 //   8) 신규 유저가 NAME 을 정하면 다른 유저가 같은 id 로 LOBBY_USER_JOIN 을 다시 받는다
 //   9) 퇴장 → LOBBY_USER_LEAVE{id}
+//  10) LOBBY_MOVES 항목 [id, x, z, name] 의 name — 별명 전 "", 별명을 정한 뒤 움직이면 그 이름
+//  11) MOTION_CHANGE — 본인 포함 전체에 {id, kind}, 연타·모르는 kind 무시, 새 입장자는 앉은 오리를 motion 1 로 받고
+//      앉은 오리가 걸으면 다시 motion 2
 //
 // ⚠️ DB 에 테스트 유저(partner=zzpre)를 만들고 끝에 자기 행만 지운다. JOIN_MATCH 는 보내지 않는다.
 // HOLD_SEC=n 이면 끝에 B 가 n 초 동안 섬을 돌아다닌다(화면으로 움직임을 볼 때 쓴다).
@@ -41,7 +44,7 @@ function ExpectedUserid(mid) {
     for (const ch of mid) xored += (ch.charCodeAt(0) ^ 5).toString(10);
     return `${TEST_PARTNER}_${xored}`;
 }
-const MIDS = ["a", "b", "c"].map((prefix) => `${prefix}${run_tag}`);
+const MIDS = ["a", "b", "c", "d", "e"].map((prefix) => `${prefix}${run_tag}`);
 const ALL_USERIDS = MIDS.map(ExpectedUserid);
 
 async function ConnectLobby() {
@@ -121,6 +124,7 @@ async function Main() {
         const later = a.received.filter((message) => message.type === "LOBBY_MOVES").flatMap((message) => message.payload.moves);
         const last = (later.length > 0 ? later.at(-1) : b_moves[0]) ?? [];
         checker.Check("마지막 위치는 (5,10)", last[1] === 5 && last[2] === 10, JSON.stringify(last));
+        checker.Check("별명 전 유저의 LOBBY_MOVES name 은 빈 문자열", last[3] === "", JSON.stringify(last));
         a.received.length = 0;
 
         console.log("\n[4] 잘못된 값");
@@ -146,8 +150,41 @@ async function Main() {
         c.connection.Send("NAME", { name });
         const renamed = await a.WaitFor("LOBBY_USER_JOIN");
         checker.Check("별명을 정하면 같은 id 로 다시 온다", renamed?.id === c.session_id && renamed?.name === name, JSON.stringify(renamed));
+        a.received.length = 0;
+        c.connection.Send("LOBBY_MOVE", { x: 2, z: 2 });
+        const named_move = (await a.WaitFor("LOBBY_MOVES"))?.moves?.find(([id]) => id === c.session_id);
+        checker.Check("별명을 정한 뒤 LOBBY_MOVES 에 그 이름이 온다 (머리 위 이름표)", named_move?.[3] === name, JSON.stringify(named_move));
 
-        console.log("\n[6] 퇴장");
+        console.log("\n[6] 오리 행동 MOTION_CHANGE");
+        a.received.length = 0;
+        b.received.length = 0;
+        b.connection.Send("MOTION_CHANGE", { kind: 1 });
+        const motion_a = await a.WaitFor("MOTION_CHANGE");
+        checker.Check("A 가 B 의 앉기를 {id, kind} 로 받는다 (userid 없음)", motion_a?.id === b.session_id && motion_a?.kind === 1 && !("userid" in motion_a), JSON.stringify(motion_a));
+        const motion_self = await b.WaitFor("MOTION_CHANGE");
+        checker.Check("보낸 B 본인도 받는다", motion_self?.id === b.session_id && motion_self?.kind === 1, JSON.stringify(motion_self));
+        b.connection.Send("MOTION_CHANGE", { kind: 3 }); // 300ms 안 연타 → 무시
+        await Sleep(FLUSH_WAIT_MS);
+        b.connection.Send("MOTION_CHANGE", { kind: 9 }); // 모르는 kind → 무시
+        b.connection.Send("MOTION_CHANGE", { kind: "1" });
+        await Sleep(FLUSH_WAIT_MS);
+        checker.Check("연타·모르는 kind 는 무시한다", !a.received.some((message) => message.type === "MOTION_CHANGE"), JSON.stringify(a.received.filter((m) => m.type === "MOTION_CHANGE")));
+        const d = await ConnectLobby();
+        lobbies.push(d);
+        const users_d = await Enter(d, MIDS[3]);
+        checker.Check(
+            "나중에 들어온 D 는 B 를 앉은 채(motion 1)로, A 를 선 채(motion 2)로 받는다",
+            users_d?.find((user) => user.id === b.session_id)?.motion === 1 && users_d?.find((user) => user.id === a.session_id)?.motion === 2,
+            JSON.stringify(users_d?.map((user) => [user.id, user.motion]))
+        );
+        b.connection.Send("LOBBY_MOVE", { x: 6, z: -3 }); // 걸으면 일어선 것
+        await Sleep(FLUSH_WAIT_MS);
+        const e = await ConnectLobby();
+        lobbies.push(e);
+        const users_e = await Enter(e, MIDS[4]);
+        checker.Check("앉은 B 가 걸은 뒤 들어온 E 는 B 를 선 채로 받는다", users_e?.find((user) => user.id === b.session_id)?.motion === 2, JSON.stringify(users_e?.map((user) => [user.id, user.motion])));
+
+        console.log("\n[7] 퇴장");
         c.connection.Close();
         const left = await a.WaitFor("LOBBY_USER_LEAVE");
         checker.Check("LOBBY_USER_LEAVE{C}", left?.id === c.session_id, JSON.stringify(left));

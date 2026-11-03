@@ -54,6 +54,7 @@ export const HIGH_FREQUENCY_MESSAGE_TYPES = new Set<string>([
     types.MessageType.LOBBY_USERS,
     types.MessageType.LOBBY_USER_JOIN,
     types.MessageType.LOBBY_USER_LEAVE,
+    types.MessageType.MOTION_CHANGE, // 로비 전체에 중계 — 한 번 누를 때 유저 수만큼 S→C 가 나간다
 ]);
 const SECRET_MASK = "***";
 

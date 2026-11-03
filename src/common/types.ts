@@ -57,7 +57,9 @@ export const MessageType = {
     LOBBY_USERS: "LOBBY_USERS",           // S→C { users:[LobbyUserInfo], color } — ENTER_LOBBY 성공 직후 한 번, 지금 로비의 다른 유저 전부 + 내 오리 색
     LOBBY_USER_JOIN: "LOBBY_USER_JOIN",   // S→C LobbyUserInfo — 새 유저 입장. 별명을 정했을 때도 같은 id 로 다시 온다
     LOBBY_USER_LEAVE: "LOBBY_USER_LEAVE", // S→C { id } — 유저 퇴장(매칭으로 게임에 간 경우 포함)
-    LOBBY_MOVES: "LOBBY_MOVES",           // S→C { moves:[[id, x, z]…] } — LOBBY_MOVE_FLUSH_MS 마다 바뀐 위치만 묶어서
+    LOBBY_MOVES: "LOBBY_MOVES",           // S→C { moves:[[id, x, z, name]…] } — LOBBY_MOVE_FLUSH_MS 마다 바뀐 위치만 묶어서. name 은 머리 위 이름표용(별명 전이면 "")
+    MOTION_CHANGE: "MOTION_CHANGE",       // C→S { kind } / S→C { id, kind } — 오리 행동(1 앉기/2 일어서기/3 인사/4 점프)을 보낸 본인 포함 전체에게.
+                                          // 시트는 userid 지만 다른 유저에게 userid 를 안 보내는 원칙에 따라 id(로비 sessionId)로 보낸다(2026-11-03 사용자 결정)
     JOIN_MATCH: "JOIN_MATCH",             // C→S { select: "Y"|"N" } — Y: 게임 참여(매칭 대기열 등록), N: 매칭 대기 취소
                                            // (CANCEL_MATCH 는 더 이상 안 쓴다 — JOIN_MATCH 로 통합됨, 문서 반영)
     MATCH_FOUND: "MATCH_FOUND",           // S→C
@@ -201,6 +203,18 @@ export interface LobbyUserInfo {
     color: number; // 오리 색 0xRRGGBB — 본인 화면과 남의 화면에서 같은 값
     x: number;
     z: number;
+    motion: number; // 지금 자세 — LOBBY_MOTION_SIT(1) 또는 LOBBY_MOTION_STAND(2)
+}
+
+// MOTION_CHANGE C→S
+export interface MotionChangePayload {
+    kind: number;
+}
+
+// MOTION_CHANGE S→C
+export interface MotionChangeResultPayload {
+    id: string; // 로비 sessionId (LobbyUserInfo.id 와 같은 값)
+    kind: number;
 }
 
 export interface LobbyMovePayload {

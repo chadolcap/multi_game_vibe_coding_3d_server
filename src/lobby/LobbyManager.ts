@@ -21,6 +21,8 @@ import type {
     LobbyMovePayload,
     LobbyUserInfo,
     MatchFoundPayload,
+    MotionChangePayload,
+    MotionChangeResultPayload,
     NamePayload,
     PlayInfoPayload,
     PlayInfoResultPayload,
@@ -63,9 +65,16 @@ function ToRankListEntries(entries: RankEntry[]): RankListEntry[] {
     return entries.map((entry): RankListEntry => [entry.name, entry.score]);
 }
 
-function ToLobbyUserInfo(sessionId: string, user: UserInfo, position: LobbyMovePayload, color: number): LobbyUserInfo {
-    return { id: sessionId, name: user.name, avatar: user.avatar, color, x: position.x, z: position.z };
+function ToLobbyUserInfo(sessionId: string, user: UserInfo, position: LobbyMovePayload, color: number, motion: number): LobbyUserInfo {
+    return { id: sessionId, name: user.name, avatar: user.avatar, color, x: position.x, z: position.z, motion };
 }
+
+const LOBBY_MOTION_KINDS = new Set<number>([
+    constants.LOBBY_MOTION_SIT,
+    constants.LOBBY_MOTION_STAND,
+    constants.LOBBY_MOTION_GREET,
+    constants.LOBBY_MOTION_JUMP,
+]);
 
 function IsEnterLobbyShape(payload: unknown): payload is EnterLobbyPayload {
     if (typeof payload !== "object" || payload === null) return false;
@@ -111,6 +120,10 @@ export class LobbyManager {
     private readonly moved_sessions = new Set<string>();
     // sessionId → 오리 색. 나간 유저의 색은 다음 사람이 받을 수 있게 비운다.
     private readonly color_by_session = new Map<string, number>();
+    // sessionId → 앉아 있는 오리. 없으면 서 있음. 새로 들어온 유저가 앉은 오리를 앉은 채로 보게 한다.
+    private readonly sitting_sessions = new Set<string>();
+    // sessionId → 마지막으로 받아들인 MOTION_CHANGE 시각(ms) — 연타 무시용
+    private readonly last_motion_at_by_session = new Map<string, number>();
 
     // ENTER_LOBBY 처리. 문서 기준(2026-09-30 갱신): 결과는 같은 type(ENTER_LOBBY)으로 응답하되,
     // 성공하면 { result:"Y", userid, new, name, avatar } 를 한 번에 보낸다(예전 LOBBY_ENTERED 는 폐지 —
@@ -194,7 +207,7 @@ export class LobbyManager {
         for (const [sessionId, position] of this.position_by_session) {
             const other_userid = this.userid_by_session.get(sessionId);
             const other = other_userid ? this.waiting_by_userid.get(other_userid) : undefined;
-            if (other) users.push(ToLobbyUserInfo(sessionId, other.user, position, this.GetDuckColor(sessionId)));
+            if (other) users.push(ToLobbyUserInfo(sessionId, other.user, position, this.GetDuckColor(sessionId), this.GetDuckMotion(sessionId)));
         }
         const color = this.PickDuckColor(user.userid);
         this.color_by_session.set(client.sessionId, color);
@@ -202,7 +215,7 @@ export class LobbyManager {
 
         const position = { x: constants.LOBBY_START_X, z: constants.LOBBY_START_Z };
         this.position_by_session.set(client.sessionId, position);
-        this.SendToLobbyUsers(types.MessageType.LOBBY_USER_JOIN, ToLobbyUserInfo(client.sessionId, user, position, color), client.sessionId);
+        this.SendToLobbyUsers(types.MessageType.LOBBY_USER_JOIN, ToLobbyUserInfo(client.sessionId, user, position, color, constants.LOBBY_MOTION_STAND), client.sessionId);
     }
 
     // 지금 로비에서 가장 적게 쓰인 색을 고른다. 그런 색이 여럿이면 userid 로 정해진 색을 먼저 봐서,
@@ -224,10 +237,16 @@ export class LobbyManager {
         return this.color_by_session.get(sessionId) ?? constants.LOBBY_DUCK_COLORS[0];
     }
 
+    private GetDuckMotion(sessionId: string): number {
+        return this.sitting_sessions.has(sessionId) ? constants.LOBBY_MOTION_SIT : constants.LOBBY_MOTION_STAND;
+    }
+
     private RemoveLobbyPresence(sessionId: string): void {
         if (!this.position_by_session.delete(sessionId)) return;
         this.moved_sessions.delete(sessionId);
         this.color_by_session.delete(sessionId);
+        this.sitting_sessions.delete(sessionId);
+        this.last_motion_at_by_session.delete(sessionId);
         this.SendToLobbyUsers(types.MessageType.LOBBY_USER_LEAVE, { id: sessionId });
     }
 
@@ -250,15 +269,40 @@ export class LobbyManager {
         position.x = Math.round(message.x * scale * 100) / 100;
         position.z = Math.round(message.z * scale * 100) / 100;
         this.moved_sessions.add(client.sessionId);
+        // 걸으면 일어선 것 — 클라이언트가 일어서기를 따로 안 보내도 새 입장자에게 앉은 채로 보이지 않게 한다
+        this.sitting_sessions.delete(client.sessionId);
+    }
+
+    // MOTION_CHANGE — 오리 행동을 보낸 본인 포함 로비 전체에 { id, kind } 로 중계한다.
+    // ENTER_LOBBY 전·모르는 kind·LOBBY_MOTION_MIN_INTERVAL_MS 안의 연타는 조용히 무시한다.
+    public HandleMotionChange(client: Client, message: MotionChangePayload): void {
+        if (!this.position_by_session.has(client.sessionId)) return;
+        const kind = message?.kind;
+        if (typeof kind !== "number" || !LOBBY_MOTION_KINDS.has(kind)) return;
+
+        const now = Date.now();
+        const last_at = this.last_motion_at_by_session.get(client.sessionId) ?? 0;
+        if (now - last_at < constants.LOBBY_MOTION_MIN_INTERVAL_MS) return;
+        this.last_motion_at_by_session.set(client.sessionId, now);
+
+        if (kind === constants.LOBBY_MOTION_SIT) this.sitting_sessions.add(client.sessionId);
+        else if (kind === constants.LOBBY_MOTION_STAND) this.sitting_sessions.delete(client.sessionId);
+
+        const payload: MotionChangeResultPayload = { id: client.sessionId, kind };
+        this.SendToLobbyUsers(types.MessageType.MOTION_CHANGE, payload);
     }
 
     // 유저마다 따로 중계하면 메시지 수가 유저 수의 제곱이 되므로, 주기마다 바뀐 위치만 한 메시지로 묶는다.
     public FlushLobbyMoves(): void {
         if (this.moved_sessions.size === 0) return;
-        const moves: [string, number, number][] = [];
+        // 머리 위 이름표를 늘 띄우도록 name 을 맨 뒤에 붙인다(앞 세 칸은 예전 형식 그대로). 별명 전이면 ""
+        const moves: [string, number, number, string][] = [];
         for (const sessionId of this.moved_sessions) {
             const position = this.position_by_session.get(sessionId);
-            if (position) moves.push([sessionId, position.x, position.z]);
+            if (!position) continue;
+            const userid = this.userid_by_session.get(sessionId);
+            const name = (userid ? this.waiting_by_userid.get(userid)?.user.name : undefined) ?? "";
+            moves.push([sessionId, position.x, position.z, name]);
         }
         this.moved_sessions.clear();
         this.SendToLobbyUsers(types.MessageType.LOBBY_MOVES, { moves });
@@ -347,7 +391,7 @@ export class LobbyManager {
         messages.SendResult(this.room, client, types.MessageType.NAME, "Y");
         const position = this.position_by_session.get(client.sessionId);
         if (position) {
-            this.SendToLobbyUsers(types.MessageType.LOBBY_USER_JOIN, ToLobbyUserInfo(client.sessionId, entry.user, position, this.GetDuckColor(client.sessionId)), client.sessionId);
+            this.SendToLobbyUsers(types.MessageType.LOBBY_USER_JOIN, ToLobbyUserInfo(client.sessionId, entry.user, position, this.GetDuckColor(client.sessionId), this.GetDuckMotion(client.sessionId)), client.sessionId);
         }
     }
 

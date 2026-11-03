@@ -3,6 +3,8 @@
 상업용 실시간 2인 대전 보드게임 서버입니다. 지금 들어 있는 게임은 **가위바위보(RPS)**, **오델로**, **점핑(stepping)**, **에어하키(airhockey)** 네 가지와, 혼자 하는 **청기백기(flag)** 하나입니다.
 Colyseus 위에서 도는 Node.js/TypeScript 서버이고, 이 파일은 Claude Code 가 매 세션 읽는 **현재 기준 설계서**입니다.
 
+> 🏝️ **이 저장소는 3D 로비(섬 위 오리 위치 공유)를 운영하는 서버**입니다(2026-11-03 새 git 저장소로 분리). 형제 프로젝트 `multi_game_vibe_coding\server_ruflo` 와는 별개지만 **포트·Redis(6780)·PM2 프로세스 이름·PM2 로그 파일명이 같아서** 동시에 띄울 수 없습니다. 재시작하기 전에 `pm2 describe <이름>` 의 `exec cwd` 가 이 폴더인지 확인하세요. `.env`·`node_modules`·`dist` 는 git 에 들어 있지 않습니다(클론 후 `.env` 준비 → `npm install` → `npm run build`).
+>
 > 📦 2026-10-13 이전의 상세한 변경 경위는 `docs/archive/CLAUDE_2026-10-13.md` 에 원본 그대로 있습니다.
 > 이 문서에는 **최종 동작**과 **다시 밟을 수 있는 함정(⚠️)** 만 남겼습니다.
 
@@ -452,10 +454,13 @@ F5 를 누르면 클라이언트 메모리의 `reconnectionToken` 이 사라집�
 | RANK_DAILY | C→S / S→C | `{game?}` / `{game, date, list:[[name,score]…], my:{rank,score}}` | 100명, 동점 공동 순위, 기록 없어도 `my` 옴 |
 | RANK_WEEKLY | C→S / S→C | `{game?}` / `{game, term:{start,end}, list, my}` | 월~일 |
 | LOBBY_MOVE 🔸 | C→S | `{x, z}` | 내 오리 위치. 입장 전·숫자 아님은 무시, 섬 밖은 잘림 |
-| LOBBY_USERS 🔸 | S→C | `{users:[{id, name, avatar, color, x, z}…], color}` | ENTER_LOBBY 성공 직후 한 번(자기 제외). `id` = 로비 sessionId, 끝의 `color` = 내 오리 색. userid·phone·star 는 보내지 않음 |
-| LOBBY_USER_JOIN 🔸 | S→C | `{id, name, avatar, color, x, z}` | 새 유저. 별명을 정하면 같은 id 로 다시 옴 |
+| LOBBY_USERS 🔸 | S→C | `{users:[{id, name, avatar, color, x, z, motion}…], color}` | ENTER_LOBBY 성공 직후 한 번(자기 제외). `id` = 로비 sessionId, 끝의 `color` = 내 오리 색. userid·phone·star 는 보내지 않음 |
+| LOBBY_USER_JOIN 🔸 | S→C | `{id, name, avatar, color, x, z, motion}` | 새 유저. 별명을 정하면 같은 id 로 다시 옴 |
 | LOBBY_USER_LEAVE 🔸 | S→C | `{id}` | 퇴장·매칭으로 게임 이동 |
-| LOBBY_MOVES 🔸 | S→C | `{moves:[[id, x, z]…]}` | 0.2초마다 바뀐 위치만 묶음(`LOBBY_MOVE_FLUSH_MS`). 같은 로비 채널 유저만 보임. 이 다섯 개는 C↔S 로그 없음 |
+| LOBBY_MOVES 🔸 | S→C | `{moves:[[id, x, z, name]…]}` | 0.2초마다 바뀐 위치만 묶음(`LOBBY_MOVE_FLUSH_MS`). `name` 은 머리 위 이름표용(2026-11-03, 별명 전이면 `""`). 같은 로비 채널 유저만 보임. 이 다섯 개는 C↔S 로그 없음 |
+| MOTION_CHANGE | C→S / S→C | `{kind}` / `{id, kind}` | 오리 행동 1 앉기 · 2 일어서기 · 3 인사 · 4 점프(2026-11-03). **보낸 본인 포함** 같은 로비 전체에. ⚠️ 시트는 `userid` 지만 다른 유저에게 userid 를 안 보내는 원칙대로 `id`(로비 sessionId)로 보냄(사용자 결정). ENTER_LOBBY 전·모르는 kind·300ms 안 연타(`LOBBY_MOTION_MIN_INTERVAL_MS`)는 무시. C↔S 로그 없음 |
+
+- 오리 `motion` 은 지금 자세(1 앉음 / 2 서 있음)다. 서버가 앉기·일어서기만 기억해 `LOBBY_USERS`·`LOBBY_USER_JOIN` 에 넣고(새 입장자도 앉은 오리를 앉은 채로 봄), 인사·점프는 기억하지 않는다. 앉은 오리가 `LOBBY_MOVE` 로 걸으면 서 있는 것으로 바꾼다(따로 알리지는 않음).
 
 - 오리 `color`(0xRRGGBB)는 **서버가 입장할 때 정한다**(`LobbyManager.PickDuckColor`). 같은 채널에서 가장 적게 쓰인 `LOBBY_DUCK_COLORS`(12색) 중, userid 로 정해진 색을 먼저 고른다 → 붐비지 않으면 같은 유저는 늘 같은 색. 13명부터는 겹친다. 저장하지 않으므로 다시 들어오면 바뀔 수 있다.
 | JOIN_MATCH | C→S | `{select:"Y/N", game?}` | `N` = 매칭 대기 취소 |
@@ -698,7 +703,7 @@ erDiagram
 | `check-airhockey-game.mjs` | 매칭 → `SERVE_SELECT`(양쪽 같은 값) 5초 → `GAME_START` → 좌표 뒤집기·중앙선 자르기 → `ONE_START.serve`·서브 쪽 퍽 → 서브 안 하고 10초 → 서브권 상대에게 → 또 10초 → 다시 돌아옴(점수 없음) → 판의 첫 LEVER_MOVE 가 끌려오지 않고 바로 놓임 → 서버가 슛·골(양쪽 궤적 반대) → 골 연출 중 끊김·재접속 `GAME_STATUS`(server 포함) → 매 판 탁구 서브 순서 확인, 서버가 골 → 첫 서버 3:2 → 결과 3초 → 재게임 첫 서브 교대 + 퇴장(A 서브 판은 살짝 넘겨 주고 봇이 3골) → OUT_USER → 재게임 무응답 10초 → RETURN_TO_LOBBY → DB. **첫 서브가 랜덤이라 승자·DB 기댓값은 SERVE_SELECT 로 계산**(약 80초). 테스트 유저끼리 매칭되지 않으면 멈추고, 예외가 나도 정리는 돈다. `MODE=invalid` = 첫 서버 서브 안 함 → 10초 뒤 서브권 넘김(횟수 안 셈) → 넘겨받은 유저가 판마다 살살 서브 후 방치 → 같은 서버로 정체 재시작 3번 → 4번째 정체에서 즉시 `GAME_RESULT{draw:"Y"}`(GAME_INVALID 없음) → A `N` 즉시 / B 무응답 10초 로비, activeGame·DB 기록 없음(약 90초) | 73/73, invalid 30/30 (서브 제한 반영 2026-10-29. 그 전 71/71 은 A·B 첫 서브 각각 2회 이상 확인, 봇을 끈 빌드에서 8건, clock 수정 전 빌드에서 무응답 1건, 고정 스텝 수정 전 빌드에서 정체 2건 실패 확인) |
 | `check-flag-game.mjs` | 즉시 MATCH_FOUND(opponent 없음) → ENTER_ROOM player1 만 → 대표 정답 즉시 Y(뒤에 보낸 답 무시) / 반대 방향 정답(내리지마→올림) / 깃발 둘 중 하나만 보냄 또는 틀린 방향 즉시 N / 무응답 5초 N(answer null) → 결과 3초 → 재게임 만점 → 무응답 10초 RETURN_TO_LOBBY → 게임 중 LEAVE·소켓 끊김 각각 현재 점수 저장 + 방 제거 + REJOIN_GAME 없음 → DB 4행·정답 누적·랭킹 → 모든 `QUEST_SHOW.say` 가 quest 와 맞는지. 1인이라 실제 클라이언트와 매칭이 섞이지 않음(약 100초) | 30/30 |
 | `check-ad-view.mjs` | ENTER_LOBBY 전 무시 → 신규 star 5 → AD_VIEW_COMPLETE Y(6) → 바로 다시 N(error 1) → DB star·`ad_log` Y·N 두 줄·Redis 캐시 → 재접속 star 6 → ADMIN_AD_LOG 오늘 요약·목록 / 없는 달 빈 결과 / 틀린 날짜 무시. JOIN_MATCH 안 보냄(약 5초) | 14/14 |
-| `check-lobby-presence.mjs` | 서로 보기: 입장 목록·JOIN·LEAVE, 다른 유저 정보에 userid·phone·star 없음, 연속 이동이 묶임, 섬 밖 자르기·잘못된 값 무시, 나중에 온 유저가 현재 위치 받음, 별명 갱신, 내가 받은 내 색 = 남이 보는 내 색, 동시 접속자끼리 색 다름. JOIN_MATCH 안 보냄(약 6초). `HOLD_SEC=n` 이면 테스트 오리가 n초 돌아다님(화면 확인용) | 16/16 (수정 전 빌드에서 11건 실패 확인) |
+| `check-lobby-presence.mjs` | 서로 보기: 입장 목록·JOIN·LEAVE, 다른 유저 정보에 userid·phone·star 없음, 연속 이동이 묶임, 섬 밖 자르기·잘못된 값 무시, 나중에 온 유저가 현재 위치 받음, 별명 갱신, 내가 받은 내 색 = 남이 보는 내 색, 동시 접속자끼리 색 다름, `MOTION_CHANGE` 중계·무시·새 입장자 자세. JOIN_MATCH 안 보냄(약 8초). `HOLD_SEC=n` 이면 테스트 오리가 n초 돌아다님(화면 확인용) | 23/23 (2026-11-03 `MOTION_CHANGE` 5건·`LOBBY_MOVES` name 2건 추가. 그 전 16/16 은 수정 전 빌드에서 11건 실패 확인) |
 | `check-star-spend.mjs` | READY 없이 퇴장 star 유지 → 게임 시작·재게임 각각 DB·Redis -1 + `GAME_RESULT.star`(청기백기·RPS, 나머지는 각 게임 스크립트) → star 0 재게임 Y 는 RETURN_TO_LOBBY → star 0 JOIN_MATCH 는 `NOT_ENOUGH_STAR` + 연결 유지 → 광고 충전 뒤 매칭 → 2인: star 없는 쪽만 로비, 남은 쪽 차감 없이 대기 → 오델로·점핑·에어하키 시작 양쪽 -1. 공용 매칭 큐 사용, 섞이면 그 단계를 실패로 끝내고 정리(약 90초) | 28/28 (수정 전 빌드에서 13건 실패 확인) |
 | `check-admin-login.mjs` / `check-send-notice.mjs` / `check-enter-lobby.mjs` | 관리자 보안 / 공지 필터 / 로비 payload | 통과 |
 

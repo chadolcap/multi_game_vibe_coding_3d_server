@@ -7,7 +7,7 @@ import * as constants from "../common/constants.js";
 import * as log from "../common/log.js";
 import * as messages from "../common/messages.js";
 import * as types from "../common/types.js";
-import type { JoinMatchPayload, LobbyMovePayload, PlayInfoPayload, RankPayload } from "../common/types.js";
+import type { JoinMatchPayload, LobbyMovePayload, MotionChangePayload, PlayInfoPayload, RankPayload } from "../common/types.js";
 import * as roomRegistry from "../common/roomRegistry.js";
 import { LobbyManager } from "./LobbyManager.js";
 
@@ -74,6 +74,9 @@ export class LobbyRoom extends Room {
 
         log.RegisterLoggedMessage<LobbyMovePayload>(this, types.MessageType.LOBBY_MOVE, (client, message) => {
             this.manager.HandleLobbyMove(client, message);
+        });
+        log.RegisterLoggedMessage<MotionChangePayload>(this, types.MessageType.MOTION_CHANGE, (client, message) => {
+            this.manager.HandleMotionChange(client, message);
         });
         this.clock.setInterval(() => this.manager.FlushLobbyMoves(), constants.LOBBY_MOVE_FLUSH_MS);
     }

@@ -88,6 +88,8 @@ export class LobbyManager {
     sitting_sessions = new Set();
     // sessionId → 마지막으로 받아들인 MOTION_CHANGE 시각(ms) — 연타 무시용
     last_motion_at_by_session = new Map();
+    // 지난번 FlushLobbyMoves 뒤로 받아들인 MOTION_CHANGE — 같은 유저가 한 주기에 둘 이상이면 마지막 것만 남는다
+    pending_motion_by_session = new Map();
     // ENTER_LOBBY 처리. 문서 기준(2026-09-30 갱신): 결과는 같은 type(ENTER_LOBBY)으로 응답하되,
     // 성공하면 { result:"Y", userid, new, name, avatar } 를 한 번에 보낸다(예전 LOBBY_ENTERED 는 폐지 —
     // 그 필드들이 이 응답에 합쳐졌다). 이 세션이 "새로 입장 성공"했으면 true 를 반환한다
@@ -200,6 +202,7 @@ export class LobbyManager {
         this.color_by_session.delete(sessionId);
         this.sitting_sessions.delete(sessionId);
         this.last_motion_at_by_session.delete(sessionId);
+        this.pending_motion_by_session.delete(sessionId);
         this.SendToLobbyUsers(types.MessageType.LOBBY_USER_LEAVE, { id: sessionId });
     }
     // 서로 보이는 유저 전체에게 보낸다. 아직 ENTER_LOBBY 를 안 끝낸 연결은 뺀다.
@@ -224,7 +227,8 @@ export class LobbyManager {
         // 걸으면 일어선 것 — 클라이언트가 일어서기를 따로 안 보내도 새 입장자에게 앉은 채로 보이지 않게 한다
         this.sitting_sessions.delete(client.sessionId);
     }
-    // MOTION_CHANGE — 오리 행동을 보낸 본인 포함 로비 전체에 { id, kind } 로 중계한다.
+    // MOTION_CHANGE — 오리 행동을 보낸 본인 포함 로비 전체에 중계한다.
+    // 바로 보내지 않고 FlushLobbyMoves 가 MOTION_CHANGES{motions:[[id, kind]…]} 로 묶어 보낸다(2026-11-04).
     // ENTER_LOBBY 전·모르는 kind·LOBBY_MOTION_MIN_INTERVAL_MS 안의 연타는 조용히 무시한다.
     HandleMotionChange(client, message) {
         if (!this.position_by_session.has(client.sessionId))
@@ -241,11 +245,23 @@ export class LobbyManager {
             this.sitting_sessions.add(client.sessionId);
         else if (kind === constants.LOBBY_MOTION_STAND)
             this.sitting_sessions.delete(client.sessionId);
-        const payload = { id: client.sessionId, kind };
-        this.SendToLobbyUsers(types.MessageType.MOTION_CHANGE, payload);
+        // Map 은 처음 넣은 순서를 지키므로, 지우고 다시 넣어 받아들인 순서대로 나가게 한다
+        this.pending_motion_by_session.delete(client.sessionId);
+        this.pending_motion_by_session.set(client.sessionId, kind);
     }
-    // 유저마다 따로 중계하면 메시지 수가 유저 수의 제곱이 되므로, 주기마다 바뀐 위치만 한 메시지로 묶는다.
+    // 유저마다 따로 중계하면 메시지 수가 유저 수의 제곱이 되므로, 주기마다 바뀐 위치·행동만 한 메시지로 묶는다.
     FlushLobbyMoves() {
+        this.FlushLobbyPositions();
+        this.FlushLobbyMotions();
+    }
+    FlushLobbyMotions() {
+        if (this.pending_motion_by_session.size === 0)
+            return;
+        const payload = { motions: [...this.pending_motion_by_session] };
+        this.pending_motion_by_session.clear();
+        this.SendToLobbyUsers(types.MessageType.MOTION_CHANGES, payload);
+    }
+    FlushLobbyPositions() {
         if (this.moved_sessions.size === 0)
             return;
         // 머리 위 이름표를 늘 띄우도록 name 을 맨 뒤에 붙인다(앞 세 칸은 예전 형식 그대로). 별명 전이면 ""

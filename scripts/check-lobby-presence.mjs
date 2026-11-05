@@ -11,7 +11,8 @@
 //   8) 신규 유저가 NAME 을 정하면 다른 유저가 같은 id 로 LOBBY_USER_JOIN 을 다시 받는다
 //   9) 퇴장 → LOBBY_USER_LEAVE{id}
 //  10) LOBBY_MOVES 항목 [id, x, z, name] 의 name — 별명 전 "", 별명을 정한 뒤 움직이면 그 이름
-//  11) MOTION_CHANGE — 본인 포함 전체에 {id, kind}, 연타·모르는 kind 무시, 새 입장자는 앉은 오리를 motion 1 로 받고
+//  11) MOTION_CHANGE — 본인 포함 전체에 MOTION_CHANGES{motions:[[id, kind]…]} 묶음으로(2026-11-04, 같은 주기의
+//      두 유저 행동이 한 메시지에), 연타·모르는 kind 무시, 새 입장자는 앉은 오리를 motion 1 로 받고
 //      앉은 오리가 걸으면 다시 motion 2
 //
 // ⚠️ DB 에 테스트 유저(partner=zzpre)를 만들고 끝에 자기 행만 지운다. JOIN_MATCH 는 보내지 않는다.
@@ -159,16 +160,31 @@ async function Main() {
         a.received.length = 0;
         b.received.length = 0;
         b.connection.Send("MOTION_CHANGE", { kind: 1 });
-        const motion_a = await a.WaitFor("MOTION_CHANGE");
-        checker.Check("A 가 B 의 앉기를 {id, kind} 로 받는다 (userid 없음)", motion_a?.id === b.session_id && motion_a?.kind === 1 && !("userid" in motion_a), JSON.stringify(motion_a));
-        const motion_self = await b.WaitFor("MOTION_CHANGE");
-        checker.Check("보낸 B 본인도 받는다", motion_self?.id === b.session_id && motion_self?.kind === 1, JSON.stringify(motion_self));
+        const motion_a = await a.WaitFor("MOTION_CHANGES");
+        const b_motion = motion_a?.motions?.find(([id]) => id === b.session_id);
+        checker.Check("A 가 B 의 앉기를 MOTION_CHANGES [id, kind] 로 받는다 (userid 없음)", b_motion?.[1] === 1 && !JSON.stringify(motion_a).includes(TEST_PARTNER), JSON.stringify(motion_a));
+        const motion_self = await b.WaitFor("MOTION_CHANGES");
+        checker.Check("보낸 B 본인도 받는다", motion_self?.motions?.some(([id, kind]) => id === b.session_id && kind === 1), JSON.stringify(motion_self));
+        checker.Check("즉시 중계하던 옛 S→C MOTION_CHANGE 는 더 이상 안 온다", !a.received.some((message) => message.type === "MOTION_CHANGE"));
         b.connection.Send("MOTION_CHANGE", { kind: 3 }); // 300ms 안 연타 → 무시
         await Sleep(FLUSH_WAIT_MS);
         b.connection.Send("MOTION_CHANGE", { kind: 9 }); // 모르는 kind → 무시
         b.connection.Send("MOTION_CHANGE", { kind: "1" });
         await Sleep(FLUSH_WAIT_MS);
-        checker.Check("연타·모르는 kind 는 무시한다", !a.received.some((message) => message.type === "MOTION_CHANGE"), JSON.stringify(a.received.filter((m) => m.type === "MOTION_CHANGE")));
+        checker.Check("연타·모르는 kind 는 무시한다", !a.received.some((message) => message.type === "MOTION_CHANGES"), JSON.stringify(a.received.filter((m) => m.type === "MOTION_CHANGES")));
+        // 같은 주기 안에 두 유저가 보내면 한 메시지에 둘 다 — 경계에 걸려 두 번에 나뉠 수 있어 한 번 더 기회를 준다
+        let batched = false;
+        for (let attempt = 0; attempt < 3 && !batched; attempt++) {
+            await Sleep(FLUSH_WAIT_MS);
+            a.received.length = 0;
+            a.connection.Send("MOTION_CHANGE", { kind: 4 });
+            b.connection.Send("MOTION_CHANGE", { kind: 3 });
+            await Sleep(FLUSH_WAIT_MS);
+            batched = a.received.some((message) => message.type === "MOTION_CHANGES" && message.payload.motions.length >= 2);
+        }
+        checker.Check("같은 주기의 두 유저 행동이 MOTION_CHANGES 한 번에 묶인다", batched, JSON.stringify(a.received.filter((m) => m.type === "MOTION_CHANGES")));
+        b.connection.Send("MOTION_CHANGE", { kind: 1 }); // 아래 D 입장 단정용으로 다시 앉힌다(3 인사가 자세를 바꾸지는 않지만 확실히)
+        await Sleep(FLUSH_WAIT_MS);
         const d = await ConnectLobby();
         lobbies.push(d);
         const users_d = await Enter(d, MIDS[3]);

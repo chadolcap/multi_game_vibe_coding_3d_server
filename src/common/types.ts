@@ -60,6 +60,9 @@ export const MessageType = {
     LOBBY_MOVES: "LOBBY_MOVES",           // S→C { moves:[[id, x, z, name]…] } — LOBBY_MOVE_FLUSH_MS 마다 바뀐 위치만 묶어서. name 은 머리 위 이름표용(별명 전이면 "")
     MOTION_CHANGE: "MOTION_CHANGE",       // C→S { kind } / S→C { id, kind } — 오리 행동(1 앉기/2 일어서기/3 인사/4 점프)을 보낸 본인 포함 전체에게.
                                           // 시트는 userid 지만 다른 유저에게 userid 를 안 보내는 원칙에 따라 id(로비 sessionId)로 보낸다(2026-11-03 사용자 결정)
+                                          // ⚠️ 2026-11-04 부터 S→C 는 아래 MOTION_CHANGES 묶음으로만 간다(C→S 는 그대로)
+    MOTION_CHANGES: "MOTION_CHANGES",     // S→C { motions:[[id, kind]…] } — LOBBY_MOVE_FLUSH_MS 마다 받아들인 MOTION_CHANGE 를 묶어서(본인 포함 전체).
+                                          // 즉시 중계는 200명 연타 때 초당 십수만 건이 돼 이벤트 루프가 밀렸다(scripts/load-lobby-crowd.mjs 실측)
     JOIN_MATCH: "JOIN_MATCH",             // C→S { select: "Y"|"N" } — Y: 게임 참여(매칭 대기열 등록), N: 매칭 대기 취소
                                            // (CANCEL_MATCH 는 더 이상 안 쓴다 — JOIN_MATCH 로 통합됨, 문서 반영)
     MATCH_FOUND: "MATCH_FOUND",           // S→C
@@ -211,10 +214,9 @@ export interface MotionChangePayload {
     kind: number;
 }
 
-// MOTION_CHANGE S→C
-export interface MotionChangeResultPayload {
-    id: string; // 로비 sessionId (LobbyUserInfo.id 와 같은 값)
-    kind: number;
+// MOTION_CHANGES S→C — 항목은 [id(로비 sessionId, LobbyUserInfo.id 와 같은 값), kind], 받아들인 순서대로
+export interface MotionChangesPayload {
+    motions: [string, number][];
 }
 
 export interface LobbyMovePayload {

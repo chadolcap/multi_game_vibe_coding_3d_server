@@ -5,12 +5,16 @@
 
 ---
 
-## 000. 로비 오리 행동 `MOTION_CHANGE` (2026-11-03)
+## 000. 로비 오리 행동 `MOTION_CHANGE` → 받는 쪽은 `MOTION_CHANGES` 묶음 (2026-11-04 변경)
 
 시트 lobby 26~27행. ⚠️ **S→C 는 시트의 `userid` 대신 `id`**(다른 LOBBY_* 메시지와 같은 로비 sessionId)로 갑니다.
+⚠️ **2026-11-04: 서버가 S→C `MOTION_CHANGE{id, kind}` 를 더 이상 보내지 않습니다.** 0.2초마다 `MOTION_CHANGES{motions:[[id, kind]…]}` 로 묶어서 옵니다(`LOBBY_MOVES` 와 같은 주기). 200명이 분수대에서 점프를 연타하면 서버가 밀려 오리 위치가 1~2초씩 끊겼기 때문입니다. 보내는 쪽(C→S `MOTION_CHANGE{kind}`)은 그대로입니다.
 
-- [ ] 행동 버튼(1 앉기 · 2 일어서기 · 3 인사 · 4 점프)을 누르면 `MOTION_CHANGE{kind}` 전송
-- [ ] `MOTION_CHANGE{id, kind}` 를 받으면 그 `id` 오리에게 동작 재생 — **내 오리 것도 옵니다**(내 id 는 로비 room 의 sessionId). 내 오리를 누를 때 바로 재생했다면 내 id 는 무시해도 됩니다
+- [ ] 행동 버튼(1 앉기 · 2 일어서기 · 3 인사 · 4 점프)을 누르면 `MOTION_CHANGE{kind}` 전송 (변경 없음)
+- [ ] **`MOTION_CHANGES` 핸들러 추가**: `motions` 배열을 앞에서부터 돌며 각 `[id, kind]` 오리에게 동작 재생. 모르는 id 는 무시
+- [ ] 기존 S→C `MOTION_CHANGE{id, kind}` 핸들러는 제거(더 이상 오지 않음)
+- [ ] **내 오리 것도 옵니다**(내 id 는 로비 room 의 sessionId). 묶음이라 누른 뒤 최대 0.2초 늦게 오므로, 내 오리는 **누를 때 바로 재생하고 내 id 는 무시**하는 것을 권장
+- 한 묶음에 같은 id 는 한 번만 옵니다(그 0.2초 안의 마지막 동작)
 - [ ] `LOBBY_USERS`·`LOBBY_USER_JOIN` 의 새 필드 `motion`(1 앉음 / 2 서 있음)으로 처음 자세 그리기 — 이미 앉아 있던 오리는 1 로 옴
 - [ ] 앉은 오리를 걷게 하면 일어선 모습으로 (서버도 걸으면 서 있는 것으로 바꿈, 따로 메시지는 없음)
 - 같은 유저가 **0.3초 안에** 다시 보내거나 1~4 가 아닌 값을 보내면 서버가 조용히 무시합니다(응답 없음)
@@ -18,8 +22,8 @@
 ```json
 // C→S
 { "kind": 1 }
-// S→C (본인 포함 로비 전체)
-{ "id": "a1B2c3D4e", "kind": 1 }
+// S→C MOTION_CHANGES (본인 포함 로비 전체, 0.2초마다 있을 때만)
+{ "motions": [["a1B2c3D4e", 1], ["Xy9_kLm2Q", 4]] }
 // LOBBY_USER_JOIN (LOBBY_USERS 의 users 항목도 같은 모양)
 { "id": "a1B2c3D4e", "name": "오리", "avatar": "a_m_0", "color": 9357823, "x": 0, "z": 27.2, "motion": 2 }
 ```
